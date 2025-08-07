@@ -1,3 +1,4 @@
 selenium>=4.10.0
 dateparser
 tzdata
+requests

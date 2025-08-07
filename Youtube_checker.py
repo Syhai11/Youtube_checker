@@ -2,18 +2,26 @@
 # dependencies = [
 #   "selenium>=4.10.0",
 #   "dateparser",
-#   "tzdata"
+#   "tzdata",
+#   "requests"
 # ]
 #
 import time
 import traceback
 import logging
 import argparse
+import platform
+import os
+import stat
+import tarfile
+import tempfile
+import requests
 from datetime import datetime, timedelta
 import dateparser
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.firefox.options import Options
+from selenium.webdriver.firefox.service import Service
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
@@ -23,6 +31,40 @@ def setup_logging(verbose=False):
         logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', filename='output.log', filemode='w')
     else:
         logging.basicConfig(level=logging.CRITICAL, format='%(message)s')
+
+def get_geckodriver_path():
+    """
+    Downloads and returns the path to the geckodriver executable.
+    Handles different architectures.
+    """
+    system = platform.system().lower()
+    arch = platform.machine().lower()
+
+    if "linux" in system and "aarch64" in arch:
+        gecko_url = "https://github.com/mozilla/geckodriver/releases/download/v0.36.0/geckodriver-v0.36.0-linux-aarch64.tar.gz"
+    elif "linux" in system and "x86_64" in arch:
+        gecko_url = "https://github.com/mozilla/geckodriver/releases/download/v0.36.0/geckodriver-v0.36.0-linux64.tar.gz"
+    else:
+        # Add more architectures here if needed
+        return None # Let selenium manager handle it
+
+    temp_dir = tempfile.gettempdir()
+    gecko_path = os.path.join(temp_dir, "geckodriver")
+
+    if not os.path.exists(gecko_path):
+        logging.info(f"Downloading geckodriver from {gecko_url}")
+        response = requests.get(gecko_url, stream=True)
+        response.raise_for_status()
+
+        with tarfile.open(fileobj=response.raw, mode="r:gz") as tar:
+            tar.extractall(path=temp_dir, filter='data')
+
+        st = os.stat(gecko_path)
+        os.chmod(gecko_path, st.st_mode | stat.S_IEXEC)
+        logging.info(f"Geckodriver downloaded and extracted to {gecko_path}")
+
+    return gecko_path
+
 
 def get_recent_video_info(driver, channel_url):
     """Optimized function to check for recent videos.
@@ -65,8 +107,7 @@ def get_recent_video_info(driver, channel_url):
             wait.until(EC.element_to_be_clickable((By.ID, "expand"))).click()
             description_container = wait.until(EC.visibility_of_element_located((By.ID, "description-inline-expander")))
             description_text = description_container.text
-            logging.info(f"--- Video Description ---
-{description_text}")
+            logging.info(f'--- Video Description ---\n{description_text}')
 
             return uploader, title, date_str, video_url
         else:
@@ -74,8 +115,7 @@ def get_recent_video_info(driver, channel_url):
             return None
 
     except Exception as e:
-        logging.error(f"an error occurred while processing {channel_url}: {e}
-{traceback.format_exc()}")
+        logging.error(f"an error occurred while processing {channel_url}: {e}\n{traceback.format_exc()}")
         return None
 
 if __name__ == '__main__':
@@ -92,12 +132,18 @@ if __name__ == '__main__':
     options = Options()
     options.add_argument("--headless")
     driver = None
+    
+    service = None
+    geckodriver_path = get_geckodriver_path()
+    if geckodriver_path:
+        service = Service(executable_path=geckodriver_path)
+
 
     try:
-        driver = webdriver.Firefox(options=options)
+        driver = webdriver.Firefox(options=options, service=service)
         # Handle consent once at the beginning
         try:
-            driver.get("https://www.youtube.com")
+            driver.get("httpshttps://www.youtube.com")
             # Using a more specific selector for the consent button
             accept_button = WebDriverWait(driver, 10).until(
                 EC.element_to_be_clickable((By.XPATH, '//button[.//span[contains(text(), "Accept all")]]'))
@@ -111,9 +157,7 @@ if __name__ == '__main__':
             video_info = get_recent_video_info(driver, channel_url)
             if video_info:
                 youtuber, title, release_date, link = video_info
-                print(f"{youtuber} - {title}
-{release_date}
-Link: {link}")
+                print(f"{youtuber} - {title}\n{release_date}\nLink: {link}")
     finally:
         if driver:
             logging.info("Quitting webdriver.")
